@@ -22,3 +22,5 @@ data/processed/*
 # Python
 .pytest_cache/
 .ruff_cache/
+
+echo "*.egg-info/" >> .gitignore

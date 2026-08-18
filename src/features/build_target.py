@@ -1,18 +1,17 @@
-from pathlib import Path
-
 import duckdb
 
-INPUT_PATH = Path("data/interim/q1_2026_selected_models.parquet")
-OUTPUT_PATH = Path("data/processed/q1_2026_failure_target.parquet")
-
-PREDICTION_HORIZON_DAYS = 7
-LAST_OBSERVABLE_DATE = "2026-03-24"
+from src.config import (
+    LAST_OBSERVABLE_DATE,
+    PREDICTION_HORIZON_DAYS,
+    SUBSET_PATH,
+    TARGET_PATH,
+)
 
 
 def main() -> None:
     con = duckdb.connect()
 
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TARGET_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     query = f"""
     COPY (
@@ -30,7 +29,7 @@ def main() -> None:
                 smart_197_raw,
                 smart_198_raw,
                 smart_199_raw
-            FROM read_parquet('{INPUT_PATH}')
+            FROM read_parquet('{SUBSET_PATH}')
         ),
 
         failure_dates AS (
@@ -75,7 +74,7 @@ def main() -> None:
         WHERE b.date <= DATE '{LAST_OBSERVABLE_DATE}'
           AND b.failure = 0
     )
-    TO '{OUTPUT_PATH}'
+    TO '{TARGET_PATH}'
     (
         FORMAT PARQUET,
         COMPRESSION ZSTD
@@ -95,10 +94,12 @@ def main() -> None:
                 100.0 * SUM(failure_next_7d) / COUNT(*),
                 4
             ) AS positive_rate_pct,
-            COUNT(DISTINCT serial_number) AS unique_drives,
+            COUNT(
+                DISTINCT model || ':' || serial_number
+            ) AS unique_drives,
             MIN(date) AS min_date,
             MAX(date) AS max_date
-        FROM read_parquet('{OUTPUT_PATH}');
+        FROM read_parquet('{TARGET_PATH}');
         """
     ).fetchdf()
 
@@ -124,7 +125,7 @@ def main() -> None:
                 END
             ) AS last_positive_date
 
-        FROM read_parquet('{OUTPUT_PATH}');
+        FROM read_parquet('{TARGET_PATH}');
         """
     ).fetchdf()
 
@@ -134,7 +135,7 @@ def main() -> None:
     print("\nTarget dataset created:")
     print(summary.to_string(index=False))
 
-    print(f"\nSaved to: {OUTPUT_PATH}")
+    print(f"\nSaved to: {TARGET_PATH}")
 
 
 if __name__ == "__main__":

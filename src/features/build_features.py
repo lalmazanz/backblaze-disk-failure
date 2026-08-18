@@ -1,26 +1,19 @@
-from pathlib import Path
-
 import duckdb
 
-INPUT_PATH = Path("data/processed/q1_2026_failure_target.parquet")
-OUTPUT_PATH = Path("data/processed/q1_2026_features.parquet")
-
-SMART_COLUMNS = [
-    "smart_1_raw",
-    "smart_5_raw",
-    "smart_7_raw",
-    "smart_9_raw",
-    "smart_194_raw",
-    "smart_197_raw",
-    "smart_198_raw",
-    "smart_199_raw",
-]
+from src.config import (
+    FEATURES_PATH,
+    SMART_COLUMNS,
+    TARGET_PATH,
+)
 
 
 def main() -> None:
     con = duckdb.connect()
 
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    FEATURES_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     lag_expressions = []
     rolling_expressions = []
@@ -90,7 +83,7 @@ def main() -> None:
                 *,
                 {lag_sql},
                 {rolling_sql}
-            FROM read_parquet('{INPUT_PATH}')
+            FROM read_parquet('{TARGET_PATH}')
             WINDOW drive_window AS (
                 PARTITION BY model, serial_number
                 ORDER BY date
@@ -101,11 +94,24 @@ def main() -> None:
             date,
             serial_number,
             model,
+
+            CASE
+                WHEN date - smart_5_raw_date_lag_1 = 1
+                THEN 1
+                ELSE 0
+            END AS has_1d_history,
+
+            CASE
+                WHEN date - smart_5_raw_date_lag_7 = 7
+                THEN 1
+                ELSE 0
+            END AS has_7d_history,
+
             {features_sql},
             failure_next_7d
         FROM lagged
     )
-    TO '{OUTPUT_PATH}'
+    TO '{FEATURES_PATH}'
     (
         FORMAT PARQUET,
         COMPRESSION ZSTD
@@ -119,7 +125,9 @@ def main() -> None:
         f"""
         SELECT
             COUNT(*) AS rows,
-            COUNT(DISTINCT model || ':' || serial_number) AS unique_drives,
+            COUNT(
+                DISTINCT model || ':' || serial_number
+            ) AS unique_drives,
             SUM(failure_next_7d) AS positive_rows,
             COUNT(*) FILTER (
                 WHERE smart_5_raw_delta_7d IS NOT NULL
@@ -132,13 +140,14 @@ def main() -> None:
             ) AS pct_with_7d_history,
             MIN(date) AS min_date,
             MAX(date) AS max_date
-        FROM read_parquet('{OUTPUT_PATH}');
+        FROM read_parquet('{FEATURES_PATH}');
         """
     ).fetchdf()
 
     print("\nFeature dataset created:")
     print(summary.to_string(index=False))
-    print(f"\nSaved to: {OUTPUT_PATH}")
+
+    print(f"\nSaved to: {FEATURES_PATH}")
 
 
 if __name__ == "__main__":

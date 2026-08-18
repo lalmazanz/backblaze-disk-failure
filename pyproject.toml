@@ -6,9 +6,13 @@ requires-python = ">=3.12"
 
 dependencies = [
     "duckdb",
+    "lightgbm",
+    "matplotlib",
     "pandas",
     "pyarrow",
     "requests",
+    "scikit-learn",
+    "shap",
 ]
 
 [project.optional-dependencies]
@@ -22,3 +26,8 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning:joblib.numpy_pickle",
+]
