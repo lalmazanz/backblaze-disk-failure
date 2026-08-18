@@ -1,6 +1,6 @@
 import duckdb
 import pandas as pd
-from lightgbm import LGBMClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     average_precision_score,
     roc_auc_score,
@@ -8,9 +8,11 @@ from sklearn.metrics import (
 
 from src.config import (
     FEATURE_COLUMNS,
-    LIGHTGBM_PARAMS,
+    NEGATIVE_RATIO,
+    RANDOM_FOREST_PARAMS,
     TOP_PCT,
 )
+from src.evaluation.policy import get_daily_alerts
 from src.modeling.data import (
     load_period,
     load_undersampled_train,
@@ -20,49 +22,25 @@ BACKTEST_WINDOWS = [
     {
         "name": "Backtest 1",
         "train_start": "2026-01-01",
-        "train_end": "2026-01-31",
+        "train_end": "2026-01-24",
         "eval_start": "2026-02-01",
         "eval_end": "2026-02-14",
     },
     {
         "name": "Backtest 2",
         "train_start": "2026-01-01",
-        "train_end": "2026-02-14",
+        "train_end": "2026-02-07",
         "eval_start": "2026-02-15",
         "eval_end": "2026-02-28",
     },
     {
         "name": "Backtest 3",
         "train_start": "2026-01-01",
-        "train_end": "2026-02-28",
+        "train_end": "2026-02-21",
         "eval_start": "2026-03-01",
         "eval_end": "2026-03-10",
     },
 ]
-
-
-def build_daily_alerts(
-    data: pd.DataFrame,
-) -> pd.DataFrame:
-    daily_alerts = []
-
-    for _, day_data in data.groupby("date"):
-        n_alerts = max(
-            1,
-            int(len(day_data) * TOP_PCT),
-        )
-
-        alerts = day_data.nlargest(
-            n_alerts,
-            "risk_score",
-        ).copy()
-
-        daily_alerts.append(alerts)
-
-    return pd.concat(
-        daily_alerts,
-        ignore_index=True,
-    )
 
 
 def evaluate_window(
@@ -77,6 +55,7 @@ def evaluate_window(
         con,
         window["train_start"],
         window["train_end"],
+        negative_ratio=NEGATIVE_RATIO,
     )
 
     evaluation = load_period(
@@ -91,9 +70,7 @@ def evaluate_window(
     x_eval = evaluation[FEATURE_COLUMNS]
     y_eval = evaluation["failure_next_7d"]
 
-    model = LGBMClassifier(
-        **LIGHTGBM_PARAMS,
-    )
+    model = RandomForestClassifier(**RANDOM_FOREST_PARAMS)
 
     model.fit(
         x_train,
@@ -121,18 +98,22 @@ def evaluate_window(
         ]
     )
 
-    alerts = build_daily_alerts(evaluation)
+    alerts = get_daily_alerts(
+        evaluation,
+        top_pct=TOP_PCT,
+    )
 
     positive_alerts = alerts[alerts["failure_next_7d"] == 1]
 
     detected_drives = set(positive_alerts["drive_id"])
 
-    if positive_drives:
-        operational_recall = len(detected_drives) / len(positive_drives)
-    else:
-        operational_recall = 0.0
+    operational_recall = (
+        len(detected_drives) / len(positive_drives) if positive_drives else 0.0
+    )
 
-    print(f"Rows: {len(evaluation)}")
+    print(f"Training rows: {len(train)}")
+    print(f"Training positives: {int(y_train.sum())}")
+    print(f"Eval rows: {len(evaluation)}")
     print(f"Positive rows: {int(y_eval.sum())}")
     print(f"Positive drives: {len(positive_drives)}")
     print(f"Detected drives: {len(detected_drives)}")
@@ -146,13 +127,15 @@ def evaluate_window(
         "train_end": window["train_end"],
         "eval_start": window["eval_start"],
         "eval_end": window["eval_end"],
+        "train_rows": len(train),
+        "training_positive_rows": int(y_train.sum()),
         "eval_rows": len(evaluation),
         "positive_rows": int(y_eval.sum()),
         "positive_drives": len(positive_drives),
         "detected_drives": len(detected_drives),
         "roc_auc": roc_auc,
         "pr_auc": pr_auc,
-        "top_1pct_drive_recall": operational_recall,
+        "top_1pct_drive_recall": (operational_recall),
     }
 
 
@@ -161,7 +144,7 @@ def main() -> None:
 
     results = []
 
-    print("Running temporal backtests...")
+    print("Running purged Random Forest temporal backtests...")
 
     for window in BACKTEST_WINDOWS:
         result = evaluate_window(
@@ -173,11 +156,14 @@ def main() -> None:
 
     results_df = pd.DataFrame(results)
 
-    print("\nBACKTEST SUMMARY")
+    print("\nRANDOM FOREST BACKTEST SUMMARY")
+
     print(
         results_df[
             [
                 "backtest",
+                "train_end",
+                "eval_start",
                 "roc_auc",
                 "pr_auc",
                 "positive_drives",

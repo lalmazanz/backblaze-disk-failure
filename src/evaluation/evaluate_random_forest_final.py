@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import duckdb
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
@@ -10,196 +8,66 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-FEATURES_PATH = Path("data/processed/q1_2026_features.parquet")
-SOURCE_PATH = Path("data/interim/q1_2026_selected_models.parquet")
+from src.config import (
+    FEATURE_COLUMNS,
+    FINAL_TRAIN_END,
+    FINAL_TRAIN_START,
+    NEGATIVE_RATIO,
+    RANDOM_FOREST_PARAMS,
+    TEST_END,
+    TEST_START,
+    TOP_PCT,
+)
+from src.evaluation.policy import (
+    get_daily_alerts,
+)
+from src.logging_utils import get_logger
+from src.modeling.data import (
+    load_failure_dates,
+    load_period,
+    load_undersampled_train,
+)
 
-FEATURE_COLUMNS = [
-    "has_1d_history",
-    "has_7d_history",
-    "smart_1_raw",
-    "smart_1_raw_delta_1d",
-    "smart_1_raw_delta_7d",
-    "smart_1_raw_mean_7d",
-    "smart_1_raw_max_7d",
-    "smart_5_raw",
-    "smart_5_raw_delta_1d",
-    "smart_5_raw_delta_7d",
-    "smart_5_raw_mean_7d",
-    "smart_5_raw_max_7d",
-    "smart_7_raw",
-    "smart_7_raw_delta_1d",
-    "smart_7_raw_delta_7d",
-    "smart_7_raw_mean_7d",
-    "smart_7_raw_max_7d",
-    "smart_9_raw",
-    "smart_9_raw_delta_1d",
-    "smart_9_raw_delta_7d",
-    "smart_9_raw_mean_7d",
-    "smart_9_raw_max_7d",
-    "smart_194_raw",
-    "smart_194_raw_delta_1d",
-    "smart_194_raw_delta_7d",
-    "smart_194_raw_mean_7d",
-    "smart_194_raw_max_7d",
-    "smart_197_raw",
-    "smart_197_raw_delta_1d",
-    "smart_197_raw_delta_7d",
-    "smart_197_raw_mean_7d",
-    "smart_197_raw_max_7d",
-    "smart_198_raw",
-    "smart_198_raw_delta_1d",
-    "smart_198_raw_delta_7d",
-    "smart_198_raw_mean_7d",
-    "smart_198_raw_max_7d",
-    "smart_199_raw",
-    "smart_199_raw_delta_1d",
-    "smart_199_raw_delta_7d",
-    "smart_199_raw_mean_7d",
-    "smart_199_raw_max_7d",
-]
-
-TRAIN_START = "2026-01-01"
-TRAIN_END = "2026-03-10"
-
-TEST_START = "2026-03-11"
-TEST_END = "2026-03-24"
-
-NEGATIVE_RATIO = 50
-TOP_PCT = 0.01
-RANDOM_STATE = 42
+logger = get_logger(__name__)
 
 
-def load_undersampled_train(
-    con: duckdb.DuckDBPyConnection,
-) -> pd.DataFrame:
-    columns = ", ".join(FEATURE_COLUMNS)
+def evaluate_row_level(
+    y_true: pd.Series,
+    probabilities: pd.Series,
+) -> dict[str, float]:
+    predictions = (probabilities >= 0.5).astype(int)
 
-    positive_count = con.execute(
-        f"""
-        SELECT COUNT(*)
-        FROM read_parquet('{FEATURES_PATH}')
-        WHERE date BETWEEN DATE '{TRAIN_START}' AND DATE '{TRAIN_END}'
-          AND failure_next_7d = 1;
-        """
-    ).fetchone()[0]
-
-    negative_sample_size = positive_count * NEGATIVE_RATIO
-
-    print(f"Train positives: {positive_count}")
-    print(f"Sampled train negatives: {negative_sample_size}")
-
-    query = f"""
-    WITH positives AS (
-        SELECT
-            {columns},
-            failure_next_7d
-        FROM read_parquet('{FEATURES_PATH}')
-        WHERE date BETWEEN DATE '{TRAIN_START}' AND DATE '{TRAIN_END}'
-          AND failure_next_7d = 1
-    ),
-
-    negatives AS (
-        SELECT
-            {columns},
-            failure_next_7d
-        FROM read_parquet('{FEATURES_PATH}')
-        WHERE date BETWEEN DATE '{TRAIN_START}' AND DATE '{TRAIN_END}'
-          AND failure_next_7d = 0
-        ORDER BY HASH(
-            model,
-            serial_number,
-            date,
-            {RANDOM_STATE}
-        )
-        LIMIT {negative_sample_size}
-    )
-
-    SELECT * FROM positives
-    UNION ALL
-    SELECT * FROM negatives;
-    """
-
-    return con.execute(query).fetchdf()
+    return {
+        "roc_auc": roc_auc_score(
+            y_true,
+            probabilities,
+        ),
+        "pr_auc": average_precision_score(
+            y_true,
+            probabilities,
+        ),
+        "precision": precision_score(
+            y_true,
+            predictions,
+            zero_division=0,
+        ),
+        "recall": recall_score(
+            y_true,
+            predictions,
+            zero_division=0,
+        ),
+    }
 
 
-def load_test(
-    con: duckdb.DuckDBPyConnection,
-) -> pd.DataFrame:
-    columns = ", ".join(FEATURE_COLUMNS)
-
-    query = f"""
-    SELECT
-        date,
-        serial_number,
-        model,
-        {columns},
-        failure_next_7d
-    FROM read_parquet('{FEATURES_PATH}')
-    WHERE date BETWEEN DATE '{TEST_START}' AND DATE '{TEST_END}';
-    """
-
-    return con.execute(query).fetchdf()
-
-
-def load_failure_dates(
-    con: duckdb.DuckDBPyConnection,
-) -> pd.DataFrame:
-    return con.execute(
-        f"""
-        SELECT
-            model || ':' || serial_number AS drive_id,
-            MIN(date) AS failure_date
-        FROM read_parquet('{SOURCE_PATH}')
-        WHERE failure = 1
-        GROUP BY model, serial_number;
-        """
-    ).fetchdf()
-
-
-def main() -> None:
-    con = duckdb.connect()
-
-    print("Building final 1:50 training sample...")
-    train = load_undersampled_train(con)
-
-    print("Loading untouched test period...")
-    test = load_test(con)
-
-    x_train = train[FEATURE_COLUMNS]
-    y_train = train["failure_next_7d"]
-
-    x_test = test[FEATURE_COLUMNS]
-    y_test = test["failure_next_7d"]
-
-    model = RandomForestClassifier(
-        n_estimators=300,
-        max_depth=None,
-        min_samples_leaf=2,
-        max_features="sqrt",
-        random_state=RANDOM_STATE,
-        n_jobs=-1,
-    )
-
-    print("Training final Random Forest...")
-    model.fit(x_train, y_train)
-
-    test = test.copy()
-
-    test["risk_score"] = model.predict_proba(x_test)[:, 1]
-
-    test["prediction_05"] = (test["risk_score"] >= 0.5).astype(int)
-
-    test["drive_id"] = test["model"] + ":" + test["serial_number"]
-
-    print("\nRANDOM FOREST FINAL TEST — row-level metrics")
-    print(f"ROC-AUC:   {roc_auc_score(y_test, test['risk_score']):.4f}")
-    print(f"PR-AUC:    {average_precision_score(y_test, test['risk_score']):.4f}")
-    print(
-        f"Precision: "
-        f"{precision_score(y_test, test['prediction_05'], zero_division=0):.4f}"
-    )
-    print(
-        f"Recall:    {recall_score(y_test, test['prediction_05'], zero_division=0):.4f}"
+def evaluate_operational(
+    test: pd.DataFrame,
+) -> tuple[
+    dict[str, float | int],
+    pd.DataFrame,
+]:
+    alerts = get_daily_alerts(
+        test,
+        top_pct=TOP_PCT,
     )
 
     positive_drives = set(
@@ -209,77 +77,153 @@ def main() -> None:
         ]
     )
 
-    daily_alerts = []
-
-    for _, day_data in test.groupby("date"):
-        n_alerts = max(
-            1,
-            int(len(day_data) * TOP_PCT),
-        )
-
-        alerts = day_data.nlargest(
-            n_alerts,
-            "risk_score",
-        ).copy()
-
-        daily_alerts.append(alerts)
-
-    alerts = pd.concat(
-        daily_alerts,
-        ignore_index=True,
-    )
-
     positive_alerts = alerts[alerts["failure_next_7d"] == 1].copy()
 
-    detected_positive_drives = set(positive_alerts["drive_id"])
+    detected_drives = set(positive_alerts["drive_id"])
 
-    drive_recall = len(detected_positive_drives) / len(positive_drives)
-
-    print("\nRANDOM FOREST FINAL TEST — operational metrics")
-    print(f"Daily inspection budget: {TOP_PCT * 100:.1f}%")
-    print(f"Alert rows: {len(alerts)}")
-    print(f"Unique alerted drives: {alerts['drive_id'].nunique()}")
-    print(f"Positive drives: {len(positive_drives)}")
-    print(f"Detected positive drives: {len(detected_positive_drives)}")
-    print(f"Drive recall: {drive_recall:.4f}")
-
-    failure_dates = load_failure_dates(con)
-
-    first_alerts = (
-        positive_alerts.groupby("drive_id")["date"]
-        .min()
-        .reset_index(name="first_alert_date")
+    drive_recall = (
+        len(detected_drives) / len(positive_drives) if positive_drives else 0.0
     )
 
-    lead_time = first_alerts.merge(
+    metrics = {
+        "alert_rows": len(alerts),
+        "unique_alerted_drives": (alerts["drive_id"].nunique()),
+        "positive_drives": (len(positive_drives)),
+        "detected_positive_drives": (len(detected_drives)),
+        "drive_recall": drive_recall,
+    }
+
+    return metrics, positive_alerts
+
+
+def evaluate_lead_time(
+    positive_alerts: pd.DataFrame,
+    failure_dates: pd.DataFrame,
+) -> pd.Series:
+    alerts_with_failure = positive_alerts.merge(
         failure_dates,
         on="drive_id",
         how="inner",
     )
 
-    lead_time["lead_days"] = (
-        lead_time["failure_date"] - lead_time["first_alert_date"]
+    alerts_with_failure["lead_days"] = (
+        alerts_with_failure["failure_date"] - alerts_with_failure["date"]
     ).dt.days
 
-    lead_time = lead_time[
-        lead_time["lead_days"].between(
+    valid_alerts = alerts_with_failure[
+        alerts_with_failure["lead_days"].between(
             1,
             7,
             inclusive="both",
         )
     ].copy()
 
+    lead_times = (
+        valid_alerts.groupby("drive_id")["lead_days"].max().dropna().astype(int)
+    )
+
+    return lead_times
+
+
+def main() -> None:
+    con = duckdb.connect()
+
+    logger.info(
+        "Building final 1:%s purged training sample...",
+        NEGATIVE_RATIO,
+    )
+
+    train = load_undersampled_train(
+        con,
+        FINAL_TRAIN_START,
+        FINAL_TRAIN_END,
+        negative_ratio=NEGATIVE_RATIO,
+    )
+
+    logger.info("Loading final test period...")
+
+    test = load_period(
+        con,
+        TEST_START,
+        TEST_END,
+    ).copy()
+
+    x_train = train[FEATURE_COLUMNS]
+    y_train = train["failure_next_7d"]
+
+    x_test = test[FEATURE_COLUMNS]
+    y_test = test["failure_next_7d"]
+
+    print(f"Final train: {FINAL_TRAIN_START} -> {FINAL_TRAIN_END}")
+    print(f"Test:        {TEST_START} -> {TEST_END}")
+    print(f"Training rows: {len(train)}")
+    print(f"Training positives: {int(y_train.sum())}")
+    print(f"Training negatives: {len(train) - int(y_train.sum())}")
+    print(f"Test rows: {len(test)}")
+    print(f"Test positives: {int(y_test.sum())}")
+
+    logger.info("Training final Random Forest...")
+
+    model = RandomForestClassifier(**RANDOM_FOREST_PARAMS)
+
+    model.fit(
+        x_train,
+        y_train,
+    )
+
+    logger.info("Scoring final test period...")
+
+    test["risk_score"] = model.predict_proba(x_test)[:, 1]
+
+    test["drive_id"] = test["model"] + ":" + test["serial_number"]
+
+    row_metrics = evaluate_row_level(
+        y_test,
+        test["risk_score"],
+    )
+
+    (
+        operational_metrics,
+        positive_alerts,
+    ) = evaluate_operational(test)
+
+    logger.info("Loading failure dates for lead-time evaluation...")
+
+    failure_dates = load_failure_dates(con)
+
+    lead_times = evaluate_lead_time(
+        positive_alerts,
+        failure_dates,
+    )
+
+    logger.info("Final Random Forest evaluation completed.")
+
+    print("\nRANDOM FOREST FINAL TEST — row-level metrics")
+    print(f"ROC-AUC:   {row_metrics['roc_auc']:.4f}")
+    print(f"PR-AUC:    {row_metrics['pr_auc']:.4f}")
+    print(f"Precision: {row_metrics['precision']:.4f}")
+    print(f"Recall:    {row_metrics['recall']:.4f}")
+
+    print("\nRANDOM FOREST FINAL TEST — operational metrics")
+    print(f"Daily inspection budget: {TOP_PCT * 100:.1f}%")
+    print(f"Alert rows: {operational_metrics['alert_rows']}")
+    print(f"Unique alerted drives: {operational_metrics['unique_alerted_drives']}")
+    print(f"Positive drives: {operational_metrics['positive_drives']}")
+    print(
+        f"Detected positive drives: {operational_metrics['detected_positive_drives']}"
+    )
+    print(f"Drive recall: {operational_metrics['drive_recall']:.4f}")
+
     print("\nRANDOM FOREST FINAL TEST — lead time")
 
-    if lead_time.empty:
+    if lead_times.empty:
         print("No valid lead-time observations.")
         return
 
-    print(lead_time["lead_days"].describe().to_string())
+    print(lead_times.describe())
 
     distribution = (
-        lead_time["lead_days"]
-        .value_counts()
+        lead_times.value_counts()
         .sort_index()
         .rename_axis("lead_days")
         .reset_index(name="drives")

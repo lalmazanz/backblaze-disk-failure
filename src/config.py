@@ -9,7 +9,8 @@ FEATURES_PATH = Path("data/processed/q1_2026_features.parquet")
 REPORTS_DIR = Path("reports")
 FIGURES_DIR = REPORTS_DIR / "figures"
 MODELS_DIR = Path("models")
-
+FINAL_MODEL_PATH = MODELS_DIR / "final_model.joblib"
+MODEL_SCHEMA_PATH = MODELS_DIR / "feature_schema.json"
 
 # Selected drive models
 SELECTED_MODELS = [
@@ -81,18 +82,29 @@ FEATURE_COLUMNS = [
 
 # Prediction setup
 PREDICTION_HORIZON_DAYS = 7
+TEMPORAL_PURGE_DAYS = PREDICTION_HORIZON_DAYS
 LAST_OBSERVABLE_DATE = "2026-03-24"
 
 
 # Temporal split
+#
+# A 7-day purge is applied between the final labelled
+# training observation and each evaluation period.
+#
+# Validation starts on 2026-03-01:
+# 2026-02-21 + 7 days = 2026-02-28
+#
+# Test starts on 2026-03-11:
+# 2026-03-03 + 7 days = 2026-03-10
+
 TRAIN_START = "2026-01-01"
-TRAIN_END = "2026-02-28"
+TRAIN_END = "2026-02-21"
 
 VALIDATION_START = "2026-03-01"
 VALIDATION_END = "2026-03-10"
 
 FINAL_TRAIN_START = "2026-01-01"
-FINAL_TRAIN_END = "2026-03-10"
+FINAL_TRAIN_END = "2026-03-03"
 
 TEST_START = "2026-03-11"
 TEST_END = "2026-03-24"
@@ -121,9 +133,9 @@ LIGHTGBM_PARAMS = {
 
 # Random Forest
 RANDOM_FOREST_PARAMS = {
-    "n_estimators": 300,
+    "n_estimators": 500,
     "max_depth": None,
-    "min_samples_leaf": 2,
+    "min_samples_leaf": 5,
     "max_features": "sqrt",
     "random_state": RANDOM_STATE,
     "n_jobs": -1,

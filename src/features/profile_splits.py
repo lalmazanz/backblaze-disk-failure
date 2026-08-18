@@ -1,8 +1,14 @@
-from pathlib import Path
-
 import duckdb
 
-DATA_PATH = Path("data/processed/q1_2026_features.parquet")
+from src.config import (
+    FEATURES_PATH,
+    TEST_END,
+    TEST_START,
+    TRAIN_END,
+    TRAIN_START,
+    VALIDATION_END,
+    VALIDATION_START,
+)
 
 
 def main() -> None:
@@ -14,13 +20,24 @@ def main() -> None:
             SELECT
                 *,
                 CASE
-                    WHEN date <= DATE '2026-02-28'
-                        THEN 'train'
-                    WHEN date <= DATE '2026-03-10'
-                        THEN 'validation'
-                    ELSE 'test'
+                    WHEN date BETWEEN
+                        DATE '{TRAIN_START}'
+                        AND DATE '{TRAIN_END}'
+                    THEN 'train'
+
+                    WHEN date BETWEEN
+                        DATE '{VALIDATION_START}'
+                        AND DATE '{VALIDATION_END}'
+                    THEN 'validation'
+
+                    WHEN date BETWEEN
+                        DATE '{TEST_START}'
+                        AND DATE '{TEST_END}'
+                    THEN 'test'
+
+                    ELSE NULL
                 END AS split
-            FROM read_parquet('{DATA_PATH}')
+            FROM read_parquet('{FEATURES_PATH}')
         )
 
         SELECT
@@ -36,10 +53,13 @@ def main() -> None:
                 END
             ) AS positive_drives,
             ROUND(
-                100.0 * SUM(failure_next_7d) / COUNT(*),
+                100.0
+                * SUM(failure_next_7d)
+                / COUNT(*),
                 4
             ) AS positive_rate_pct
         FROM labeled
+        WHERE split IS NOT NULL
         GROUP BY split
         ORDER BY
             CASE split
@@ -50,8 +70,12 @@ def main() -> None:
         """
     ).fetchdf()
 
-    print("Proposed temporal split:")
+    print("Purged temporal split:")
     print(result.to_string(index=False))
+
+    print("\nExcluded purge periods:")
+    print(f"Train -> validation: {TRAIN_END} to {VALIDATION_START}")
+    print(f"Final-train -> test handled separately: test begins {TEST_START}")
 
 
 if __name__ == "__main__":

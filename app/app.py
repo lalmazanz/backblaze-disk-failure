@@ -454,7 +454,10 @@ def render_smart_signal(
         width="stretch",
     )
 
-    metric_col1, metric_col2 = st.columns(2)
+    (
+        metric_col1,
+        metric_col2,
+    ) = st.columns(2)
 
     if summary["current"] is None:
         current_display = "N/A"
@@ -492,11 +495,20 @@ def get_local_shap(
 
     explanation = explainer(x_selected)
 
+    values = explanation.values
+
+    if values.ndim == 3:
+        shap_values = values[0, :, 1]
+    elif values.ndim == 2:
+        shap_values = values[0]
+    else:
+        raise ValueError(f"Unexpected SHAP output shape: {values.shape}")
+
     shap_data = pd.DataFrame(
         {
-            "feature": (FEATURE_COLUMNS),
+            "feature": FEATURE_COLUMNS,
             "feature_value": (x_selected.iloc[0].values),
-            "shap_value": (explanation.values[0]),
+            "shap_value": (shap_values),
         }
     )
 
@@ -525,7 +537,7 @@ def build_shap_chart(
         .encode(
             x=alt.X(
                 "shap_value:Q",
-                title=("SHAP impact on model output"),
+                title=("SHAP contribution to failure-risk score"),
             ),
             y=alt.Y(
                 "feature_label:N",
@@ -606,7 +618,7 @@ def render_shap_summary(
                 _,
                 row,
             ) in positive.iterrows():
-                st.write(f"• {row['feature_label']} ({row['shap_value']:+.2f})")
+                st.write(f"• {row['feature_label']} ({row['shap_value']:+.3f})")
 
     with right:
         st.markdown("**Main factors reducing risk**")
@@ -618,7 +630,7 @@ def render_shap_summary(
                 _,
                 row,
             ) in negative.iterrows():
-                st.write(f"• {row['feature_label']} ({row['shap_value']:+.2f})")
+                st.write(f"• {row['feature_label']} ({row['shap_value']:+.3f})")
 
 
 def main() -> None:
@@ -634,13 +646,13 @@ def main() -> None:
     )
 
     st.caption(
-        "Predictive maintenance "
-        "demo using Backblaze "
-        "SMART telemetry. "
-        "The model estimates "
-        "whether a hard drive is "
-        "at elevated risk of failure "
-        "within the next 7 days."
+        "Predictive maintenance demo "
+        "using Backblaze SMART telemetry "
+        "and a Random Forest model. "
+        "The system ranks hard drives "
+        "according to their estimated "
+        "risk of failure within the "
+        "next 7 days."
     )
 
     data = load_data()
@@ -726,6 +738,16 @@ def main() -> None:
         horizon_status,
     )
 
+    st.caption(
+        "The displayed risk score "
+        "is used for ranking drives. "
+        "Because the model was trained "
+        "with 1:50 negative undersampling, "
+        "it should not be interpreted "
+        "as a calibrated real-world "
+        "failure probability."
+    )
+
     st.divider()
 
     left, right = st.columns(2)
@@ -760,13 +782,13 @@ def main() -> None:
 
         if selected_row["top_1pct_alert"]:
             st.warning(
-                "This observation "
-                "belongs to the daily "
-                "top 1% highest-risk "
-                "drives. Under the "
-                "inspection policy, "
-                "it would be flagged "
-                "for maintenance review."
+                "This observation belongs "
+                "to the daily top 1% "
+                "highest-risk drives. "
+                "Under the inspection "
+                "policy, it would be "
+                "flagged for maintenance "
+                "review."
             )
         else:
             st.success(
@@ -791,7 +813,11 @@ def main() -> None:
         width="stretch",
     )
 
-    legend_col1, (legend_col2), legend_col3 = st.columns(3)
+    (
+        legend_col1,
+        legend_col2,
+        legend_col3,
+    ) = st.columns(3)
 
     legend_col1.caption("● Selected observation")
 
@@ -804,7 +830,7 @@ def main() -> None:
         "Operational alerts are "
         "based on the daily top 1% "
         "risk ranking rather than "
-        "a fixed probability threshold."
+        "a fixed score threshold."
     )
 
     st.divider()
@@ -824,7 +850,11 @@ def main() -> None:
         "temporal chart."
     )
 
-    smart_5_col, (smart_197_col), smart_198_col = st.columns(3)
+    (
+        smart_5_col,
+        smart_197_col,
+        smart_198_col,
+    ) = st.columns(3)
 
     with smart_5_col:
         render_smart_signal(
@@ -857,10 +887,12 @@ def main() -> None:
     st.caption(
         "Local SHAP values explain "
         "how each feature contributed "
-        "to this specific model output. "
-        "Positive values push risk "
-        "upward; negative values "
-        "push it downward."
+        "to the Random Forest output "
+        "for this observation. "
+        "Positive values push the "
+        "failure-risk score upward; "
+        "negative values push it "
+        "downward."
     )
 
     shap_data = get_local_shap(selected_row)
@@ -873,11 +905,12 @@ def main() -> None:
     render_shap_summary(shap_data)
 
     st.caption(
-        "SHAP impacts are expressed "
-        "on the model's internal "
-        "output scale, not as direct "
-        "percentage-point changes "
-        "in the displayed risk score."
+        "SHAP values explain the "
+        "model's prediction for this "
+        "observation. They describe "
+        "model behavior, not causal "
+        "effects or calibrated "
+        "probability changes."
     )
 
 

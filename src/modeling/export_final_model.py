@@ -1,91 +1,95 @@
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import duckdb
 import joblib
-from lightgbm import LGBMClassifier
+from sklearn.ensemble import RandomForestClassifier
 
 from src.config import (
     FEATURE_COLUMNS,
+    FINAL_MODEL_PATH,
     FINAL_TRAIN_END,
     FINAL_TRAIN_START,
-    LIGHTGBM_PARAMS,
+    MODEL_SCHEMA_PATH,
     MODELS_DIR,
     NEGATIVE_RATIO,
     PREDICTION_HORIZON_DAYS,
+    RANDOM_FOREST_PARAMS,
     RANDOM_STATE,
 )
+from src.logging_utils import get_logger
 from src.modeling.data import load_undersampled_train
 
-MODEL_PATH = MODELS_DIR / "lightgbm_final.joblib"
-SCHEMA_PATH = MODELS_DIR / "feature_schema.json"
+logger = get_logger(__name__)
 
 
 def main() -> None:
-    MODELS_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
     con = duckdb.connect()
 
-    print("Loading final training sample...")
+    logger.info("Loading final purged training sample...")
 
     train = load_undersampled_train(
         con,
         FINAL_TRAIN_START,
         FINAL_TRAIN_END,
+        negative_ratio=NEGATIVE_RATIO,
     )
 
-    x_train = train[FEATURE_COLUMNS]
-    y_train = train["failure_next_7d"]
-
-    positive_rows = int(y_train.sum())
+    positive_rows = int(train["failure_next_7d"].sum())
     negative_rows = len(train) - positive_rows
 
+    print(f"Training period: {FINAL_TRAIN_START} -> {FINAL_TRAIN_END}")
     print(f"Training rows: {len(train)}")
     print(f"Training positives: {positive_rows}")
     print(f"Training negatives: {negative_rows}")
     print(f"Features: {len(FEATURE_COLUMNS)}")
 
-    model = LGBMClassifier(
-        **LIGHTGBM_PARAMS,
-    )
+    x_train = train[FEATURE_COLUMNS]
+    y_train = train["failure_next_7d"]
 
-    print("Training final LightGBM...")
+    logger.info("Training final Random Forest...")
+
+    model = RandomForestClassifier(**RANDOM_FOREST_PARAMS)
 
     model.fit(
         x_train,
         y_train,
     )
 
-    print("Saving model...")
+    MODELS_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    logger.info("Saving final model artifact...")
 
     joblib.dump(
         model,
-        MODEL_PATH,
+        FINAL_MODEL_PATH,
     )
 
     schema = {
-        "model_type": "LightGBM",
+        "model_type": "RandomForestClassifier",
         "target": "failure_next_7d",
         "prediction_horizon_days": (PREDICTION_HORIZON_DAYS),
         "features": FEATURE_COLUMNS,
         "feature_count": len(FEATURE_COLUMNS),
-        "training": {
-            "start_date": FINAL_TRAIN_START,
-            "end_date": FINAL_TRAIN_END,
-            "negative_ratio": NEGATIVE_RATIO,
-            "random_state": RANDOM_STATE,
-            "rows": len(train),
-            "positive_rows": positive_rows,
-            "negative_rows": negative_rows,
+        "training_period": {
+            "start": FINAL_TRAIN_START,
+            "end": FINAL_TRAIN_END,
         },
-        "model_params": LIGHTGBM_PARAMS,
-        "exported_at_utc": datetime.now(UTC).isoformat(),
+        "negative_ratio": NEGATIVE_RATIO,
+        "random_state": RANDOM_STATE,
+        "training_rows": len(train),
+        "training_positive_rows": (positive_rows),
+        "training_negative_rows": (negative_rows),
+        "model_params": (RANDOM_FOREST_PARAMS),
+        "exported_at_utc": (datetime.now(timezone.utc).isoformat()),
     }
 
-    with SCHEMA_PATH.open(
+    logger.info("Saving feature schema...")
+
+    with MODEL_SCHEMA_PATH.open(
         "w",
         encoding="utf-8",
     ) as file:
@@ -95,8 +99,10 @@ def main() -> None:
             indent=2,
         )
 
-    print(f"\nModel saved to: {MODEL_PATH}")
-    print(f"Schema saved to: {SCHEMA_PATH}")
+    logger.info("Final Random Forest export completed.")
+
+    print(f"\nModel saved to: {FINAL_MODEL_PATH}")
+    print(f"Schema saved to: {MODEL_SCHEMA_PATH}")
 
 
 if __name__ == "__main__":

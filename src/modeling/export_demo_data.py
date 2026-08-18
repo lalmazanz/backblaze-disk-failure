@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import duckdb
 
 from src.config import (
@@ -5,16 +7,27 @@ from src.config import (
     TEST_END,
     TEST_START,
 )
-from src.modeling.data import load_failure_dates, load_period
-from src.modeling.inference import predict_risk
+from src.evaluation.policy import (
+    add_daily_alert_policy,
+)
+from src.logging_utils import get_logger
+from src.modeling.data import (
+    load_failure_dates,
+    load_period,
+)
+from src.modeling.inference import (
+    predict_risk,
+)
 
-OUTPUT_PATH = "data/processed/demo_predictions.parquet"
+logger = get_logger(__name__)
+
+OUTPUT_PATH = Path("data/processed/demo_predictions.parquet")
 
 
 def main() -> None:
     con = duckdb.connect()
 
-    print("Loading test period...")
+    logger.info("Loading test period...")
 
     test = load_period(
         con,
@@ -24,11 +37,13 @@ def main() -> None:
 
     print(f"Test rows: {len(test)}")
 
-    print("Scoring test period with exported model...")
+    logger.info("Scoring test period with exported model...")
 
     test["risk_score"] = predict_risk(test[FEATURE_COLUMNS])
 
     test["drive_id"] = test["model"] + ":" + test["serial_number"]
+
+    logger.info("Loading observed failure dates...")
 
     failure_dates = load_failure_dates(con)
 
@@ -42,18 +57,9 @@ def main() -> None:
 
     test["within_failure_horizon"] = test["failure_next_7d"] == 1
 
-    daily_rank = test.groupby("date")["risk_score"].rank(
-        method="first",
-        ascending=False,
-    )
+    logger.info("Applying deterministic daily alert policy...")
 
-    daily_count = test.groupby("date")["risk_score"].transform("size")
-
-    test["risk_rank"] = daily_rank.astype(int)
-
-    test["risk_percentile"] = daily_rank / daily_count
-
-    test["top_1pct_alert"] = test["risk_percentile"] <= 0.01
+    test = add_daily_alert_policy(test)
 
     output_columns = [
         "date",
@@ -78,16 +84,34 @@ def main() -> None:
         ]
     )
 
+    OUTPUT_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    logger.info("Saving full demo dataset...")
+
     demo.to_parquet(
         OUTPUT_PATH,
         index=False,
         compression="zstd",
     )
 
+    logger.info("Demo export completed.")
+
     print("\nDemo dataset created:")
     print(f"Rows: {len(demo)}")
     print(f"Unique drives: {demo['drive_id'].nunique()}")
     print(f"Top 1% alert rows: {demo['top_1pct_alert'].sum()}")
+    print(
+        "Unique alerted drives: "
+        f"{
+            demo.loc[
+                demo['top_1pct_alert'],
+                'drive_id',
+            ].nunique()
+        }"
+    )
     print(f"Positive rows: {demo['failure_next_7d'].sum()}")
     print(
         "Drives with known failure: "

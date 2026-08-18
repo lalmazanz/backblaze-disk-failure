@@ -1,31 +1,33 @@
 import json
+from collections.abc import Mapping
 
 import joblib
 import numpy as np
 import pandas as pd
 
-from src.config import FEATURE_COLUMNS, MODELS_DIR
-
-MODEL_PATH = MODELS_DIR / "lightgbm_final.joblib"
-SCHEMA_PATH = MODELS_DIR / "feature_schema.json"
+from src.config import (
+    FEATURE_COLUMNS,
+    FINAL_MODEL_PATH,
+    MODEL_SCHEMA_PATH,
+)
 
 
 class FeatureSchemaError(ValueError):
-    pass
+    """Raised when inference features do not match the model schema."""
 
 
 def load_model():
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(f"Model artifact not found: {MODEL_PATH}")
+    if not FINAL_MODEL_PATH.exists():
+        raise FileNotFoundError(f"Final model artifact not found: {FINAL_MODEL_PATH}")
 
-    return joblib.load(MODEL_PATH)
+    return joblib.load(FINAL_MODEL_PATH)
 
 
 def load_schema() -> dict:
-    if not SCHEMA_PATH.exists():
-        raise FileNotFoundError(f"Feature schema not found: {SCHEMA_PATH}")
+    if not MODEL_SCHEMA_PATH.exists():
+        raise FileNotFoundError(f"Model schema not found: {MODEL_SCHEMA_PATH}")
 
-    with SCHEMA_PATH.open(
+    with MODEL_SCHEMA_PATH.open(
         "r",
         encoding="utf-8",
     ) as file:
@@ -38,115 +40,119 @@ def validate_schema(
     if "features" not in schema:
         raise FeatureSchemaError("Schema does not contain a 'features' field.")
 
-    expected_features = schema["features"]
+    features = schema["features"]
 
-    if expected_features != FEATURE_COLUMNS:
+    if not isinstance(features, list):
+        raise FeatureSchemaError("Schema 'features' field must be a list.")
+
+    if features != FEATURE_COLUMNS:
         raise FeatureSchemaError(
-            "Saved feature schema does not match the current project configuration."
+            "Saved model feature schema does not match current config."
         )
 
-    if schema.get("feature_count") != len(expected_features):
+    feature_count = schema.get("feature_count")
+
+    if feature_count != len(features):
         raise FeatureSchemaError(
-            "Schema feature_count does not match the number of saved features."
+            "Schema feature_count does not match the number of features."
         )
 
-    return expected_features
+    return features
 
 
 def validate_features(
-    data: pd.DataFrame,
+    features: pd.DataFrame,
     expected_features: list[str],
 ) -> None:
-    if data.empty:
-        raise FeatureSchemaError("Input data contains no rows.")
+    if features.empty:
+        raise FeatureSchemaError("Inference input is empty.")
 
-    missing_features = [
-        feature for feature in expected_features if feature not in data.columns
+    actual_columns = list(features.columns)
+
+    missing = [column for column in expected_features if column not in actual_columns]
+
+    unexpected = [
+        column for column in actual_columns if column not in expected_features
     ]
 
-    if missing_features:
-        raise FeatureSchemaError(
-            "Missing required features: " + ", ".join(missing_features)
-        )
+    if missing:
+        raise FeatureSchemaError("Missing required features: " + ", ".join(missing))
 
-    unexpected_features = [
-        column for column in data.columns if column not in expected_features
-    ]
+    if unexpected:
+        raise FeatureSchemaError("Unexpected features: " + ", ".join(unexpected))
 
-    if unexpected_features:
-        raise FeatureSchemaError(
-            "Unexpected features: " + ", ".join(unexpected_features)
-        )
-
-    if list(data.columns) != expected_features:
+    if actual_columns != expected_features:
         raise FeatureSchemaError("Feature columns are not in the expected order.")
 
     non_numeric = [
         column
         for column in expected_features
-        if not pd.api.types.is_numeric_dtype(data[column])
+        if not pd.api.types.is_numeric_dtype(features[column])
     ]
 
     if non_numeric:
-        raise FeatureSchemaError(
-            "Non-numeric feature columns: " + ", ".join(non_numeric)
-        )
+        raise FeatureSchemaError("Non-numeric features: " + ", ".join(non_numeric))
 
-    numeric_values = data[expected_features].to_numpy(
+    values = features[expected_features].to_numpy(
         dtype=float,
         copy=False,
     )
 
-    if np.isinf(numeric_values).any():
+    if np.isinf(values).any():
         raise FeatureSchemaError("Input contains infinite values.")
+
+    # NaN values are intentionally allowed.
+    # Random Forest itself cannot consume NaNs in
+    # every sklearn version, so exported/demo data
+    # should preserve the same feature-generation
+    # assumptions used during model training.
 
 
 def predict_risk(
-    data: pd.DataFrame,
+    features: pd.DataFrame,
 ) -> pd.Series:
     schema = load_schema()
 
     expected_features = validate_schema(schema)
 
     validate_features(
-        data,
+        features,
         expected_features,
     )
 
     model = load_model()
 
-    if getattr(
+    model_feature_count = getattr(
         model,
         "n_features_in_",
         None,
-    ) != len(expected_features):
-        raise FeatureSchemaError(
-            "Model feature count does not match the saved feature schema."
-        )
+    )
 
-    risk_scores = model.predict_proba(data[expected_features])[:, 1]
+    if model_feature_count is not None and model_feature_count != len(
+        expected_features
+    ):
+        raise FeatureSchemaError("Model feature count does not match saved schema.")
+
+    probabilities = model.predict_proba(features[expected_features])[:, 1]
 
     return pd.Series(
-        risk_scores,
-        index=data.index,
+        probabilities,
+        index=features.index,
         name="risk_score",
     )
 
 
 def predict_risk_from_row(
-    row: dict,
+    row: Mapping[str, object],
 ) -> float:
-    schema = load_schema()
+    missing = [feature for feature in FEATURE_COLUMNS if feature not in row]
 
-    expected_features = validate_schema(schema)
+    if missing:
+        raise FeatureSchemaError("Missing required features: " + ", ".join(missing))
 
-    missing_features = [feature for feature in expected_features if feature not in row]
+    features = pd.DataFrame(
+        [{feature: row[feature] for feature in FEATURE_COLUMNS}],
+        columns=FEATURE_COLUMNS,
+    )
 
-    if missing_features:
-        raise FeatureSchemaError(
-            "Missing required features: " + ", ".join(missing_features)
-        )
-
-    data = pd.DataFrame([{feature: row[feature] for feature in expected_features}])
-
-    return float(predict_risk(data).iloc[0])
+    return float(predict_risk(features).iloc[0])

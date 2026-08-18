@@ -24,3 +24,5 @@ data/processed/*
 .ruff_cache/
 
 echo "*.egg-info/" >> .gitignore
+
+!data/processed/demo_predictions_compact.parquet

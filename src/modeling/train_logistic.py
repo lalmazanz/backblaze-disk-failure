@@ -1,7 +1,4 @@
-from pathlib import Path
-
 import duckdb
-import pandas as pd
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
@@ -13,116 +10,59 @@ from sklearn.metrics import (
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-DATA_PATH = Path("data/processed/q1_2026_features.parquet")
-
-FEATURE_COLUMNS = [
-    "has_1d_history",
-    "has_7d_history",
-    "smart_1_raw",
-    "smart_1_raw_delta_1d",
-    "smart_1_raw_delta_7d",
-    "smart_1_raw_mean_7d",
-    "smart_1_raw_max_7d",
-    "smart_5_raw",
-    "smart_5_raw_delta_1d",
-    "smart_5_raw_delta_7d",
-    "smart_5_raw_mean_7d",
-    "smart_5_raw_max_7d",
-    "smart_7_raw",
-    "smart_7_raw_delta_1d",
-    "smart_7_raw_delta_7d",
-    "smart_7_raw_mean_7d",
-    "smart_7_raw_max_7d",
-    "smart_9_raw",
-    "smart_9_raw_delta_1d",
-    "smart_9_raw_delta_7d",
-    "smart_9_raw_mean_7d",
-    "smart_9_raw_max_7d",
-    "smart_194_raw",
-    "smart_194_raw_delta_1d",
-    "smart_194_raw_delta_7d",
-    "smart_194_raw_mean_7d",
-    "smart_194_raw_max_7d",
-    "smart_197_raw",
-    "smart_197_raw_delta_1d",
-    "smart_197_raw_delta_7d",
-    "smart_197_raw_mean_7d",
-    "smart_197_raw_max_7d",
-    "smart_198_raw",
-    "smart_198_raw_delta_1d",
-    "smart_198_raw_delta_7d",
-    "smart_198_raw_mean_7d",
-    "smart_198_raw_max_7d",
-    "smart_199_raw",
-    "smart_199_raw_delta_1d",
-    "smart_199_raw_delta_7d",
-    "smart_199_raw_mean_7d",
-    "smart_199_raw_max_7d",
-]
-
-
-def load_split(
-    con: duckdb.DuckDBPyConnection,
-    start_date: str,
-    end_date: str,
-) -> pd.DataFrame:
-    columns = ", ".join(FEATURE_COLUMNS)
-
-    query = f"""
-    SELECT
-        {columns},
-        failure_next_7d
-    FROM read_parquet('{DATA_PATH}')
-    WHERE date BETWEEN DATE '{start_date}' AND DATE '{end_date}'
-    """
-
-    return con.execute(query).fetchdf()
-
-
-def evaluate(
-    name: str,
-    model: Pipeline,
-    x: pd.DataFrame,
-    y: pd.Series,
-) -> None:
-    probabilities = model.predict_proba(x)[:, 1]
-    predictions = (probabilities >= 0.5).astype(int)
-
-    print(f"\n{name}")
-    print(f"ROC-AUC:   {roc_auc_score(y, probabilities):.4f}")
-    print(f"PR-AUC:    {average_precision_score(y, probabilities):.4f}")
-    print(f"Precision: {precision_score(y, predictions, zero_division=0):.4f}")
-    print(f"Recall:    {recall_score(y, predictions, zero_division=0):.4f}")
+from src.config import (
+    FEATURE_COLUMNS,
+    TOP_PCT,
+    TRAIN_END,
+    TRAIN_START,
+    VALIDATION_END,
+    VALIDATION_START,
+)
+from src.evaluation.policy import (
+    get_daily_alerts,
+)
+from src.modeling.data import (
+    load_period,
+)
 
 
 def main() -> None:
     con = duckdb.connect()
 
-    print("Loading train...")
-    train = load_split(
+    print("Loading purged train period...")
+
+    train = load_period(
         con,
-        "2026-01-01",
-        "2026-02-28",
+        TRAIN_START,
+        TRAIN_END,
     )
 
-    print("Loading validation...")
-    validation = load_split(
+    print("Loading validation period...")
+
+    validation = load_period(
         con,
-        "2026-03-01",
-        "2026-03-10",
-    )
+        VALIDATION_START,
+        VALIDATION_END,
+    ).copy()
 
     x_train = train[FEATURE_COLUMNS]
     y_train = train["failure_next_7d"]
 
-    x_validation = validation[FEATURE_COLUMNS]
-    y_validation = validation["failure_next_7d"]
+    x_val = validation[FEATURE_COLUMNS]
+    y_val = validation["failure_next_7d"]
 
-    model = Pipeline(
-        steps=[
+    print(f"Training rows: {len(train)}")
+    print(f"Training positives: {int(y_train.sum())}")
+    print(f"Validation rows: {len(validation)}")
+    print(f"Validation positives: {int(y_val.sum())}")
+
+    pipeline = Pipeline(
+        [
             (
                 "imputer",
-                SimpleImputer(strategy="median"),
+                SimpleImputer(
+                    strategy="median",
+                ),
             ),
             (
                 "scaler",
@@ -140,21 +80,72 @@ def main() -> None:
     )
 
     print("Training Logistic Regression...")
-    model.fit(x_train, y_train)
 
-    evaluate(
-        "TRAIN",
-        model,
+    pipeline.fit(
         x_train,
         y_train,
     )
 
-    evaluate(
-        "VALIDATION",
-        model,
-        x_validation,
-        y_validation,
+    probabilities = pipeline.predict_proba(x_val)[:, 1]
+
+    predictions = (probabilities >= 0.5).astype(int)
+
+    roc_auc = roc_auc_score(
+        y_val,
+        probabilities,
     )
+
+    pr_auc = average_precision_score(
+        y_val,
+        probabilities,
+    )
+
+    precision = precision_score(
+        y_val,
+        predictions,
+        zero_division=0,
+    )
+
+    recall = recall_score(
+        y_val,
+        predictions,
+        zero_division=0,
+    )
+
+    validation["risk_score"] = probabilities
+
+    validation["drive_id"] = validation["model"] + ":" + validation["serial_number"]
+
+    positive_drives = set(
+        validation.loc[
+            validation["failure_next_7d"] == 1,
+            "drive_id",
+        ]
+    )
+
+    alerts = get_daily_alerts(
+        validation,
+        top_pct=TOP_PCT,
+    )
+
+    positive_alerts = alerts[alerts["failure_next_7d"] == 1]
+
+    detected_drives = set(positive_alerts["drive_id"])
+
+    operational_recall = (
+        len(detected_drives) / len(positive_drives) if positive_drives else 0.0
+    )
+
+    print("\nVALIDATION — Logistic Regression")
+    print(f"ROC-AUC:   {roc_auc:.4f}")
+    print(f"PR-AUC:    {pr_auc:.4f}")
+    print(f"Precision: {precision:.4f}")
+    print(f"Recall:    {recall:.4f}")
+
+    print(f"\nOperational top {TOP_PCT * 100:.1f}%")
+    print(f"Positive drives: {len(positive_drives)}")
+    print(f"Detected drives: {len(detected_drives)}")
+    print(f"Drive recall: {operational_recall:.4f}")
 
 
 if __name__ == "__main__":
