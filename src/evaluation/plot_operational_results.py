@@ -17,7 +17,7 @@ def plot_detection_by_model() -> None:
 
     data["missed_drives"] = data["positive_drives"] - data["detected_drives"]
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    _, ax = plt.subplots(figsize=(10, 6))
 
     ax.bar(
         data["model"],
@@ -69,7 +69,7 @@ def plot_lead_time() -> None:
         }
     )
 
-    fig, ax = plt.subplots(figsize=(9, 5))
+    _, ax = plt.subplots(figsize=(9, 5))
 
     bars = ax.bar(
         lead_time["lead_days"],
