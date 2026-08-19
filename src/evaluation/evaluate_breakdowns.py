@@ -14,6 +14,7 @@ from src.config import (
     FINAL_TRAIN_START,
     NEGATIVE_RATIO,
     RANDOM_FOREST_PARAMS,
+    REPORTS_DIR,
     SELECTED_MODELS,
     TEST_END,
     TEST_START,
@@ -220,11 +221,30 @@ def main() -> None:
 
     model_results = evaluate_by_model(test)
 
+    REPORTS_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    model_output_path = REPORTS_DIR / "model_breakdown.csv"
+
+    model_results.to_csv(
+        model_output_path,
+        index=False,
+    )
+
     print(model_results.to_string(index=False))
 
     print("\nPER-DATE EVALUATION")
 
     date_results = evaluate_by_date(test)
+
+    date_output_path = REPORTS_DIR / "daily_breakdown.csv"
+
+    date_results.to_csv(
+        date_output_path,
+        index=False,
+    )
 
     print(date_results.to_string(index=False))
 
@@ -245,6 +265,10 @@ def main() -> None:
             ]
         )
     )
+
+    print(f"\nModel breakdown saved to: {model_output_path}")
+
+    print(f"Daily breakdown saved to: {date_output_path}")
 
 
 if __name__ == "__main__":

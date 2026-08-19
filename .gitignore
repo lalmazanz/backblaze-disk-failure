@@ -23,6 +23,6 @@ data/processed/*
 .pytest_cache/
 .ruff_cache/
 
-echo "*.egg-info/" >> .gitignore
+*.egg-info/
 
 !data/processed/demo_predictions_compact.parquet

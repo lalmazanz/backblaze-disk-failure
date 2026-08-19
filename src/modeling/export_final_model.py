@@ -38,6 +38,7 @@ def main() -> None:
     )
 
     positive_rows = int(train["failure_next_7d"].sum())
+
     negative_rows = len(train) - positive_rows
 
     print(f"Training period: {FINAL_TRAIN_START} -> {FINAL_TRAIN_END}")
@@ -49,7 +50,7 @@ def main() -> None:
     x_train = train[FEATURE_COLUMNS]
     y_train = train["failure_next_7d"]
 
-    logger.info("Training final Random Forest...")
+    logger.info("Training final Random Forest pipeline...")
 
     model = Pipeline(
         steps=[
@@ -85,7 +86,8 @@ def main() -> None:
     )
 
     schema = {
-        "model_type": "RandomForestClassifier",
+        "model_type": "Pipeline",
+        "estimator_type": ("RandomForestClassifier"),
         "preprocessing": {
             "imputer": "SimpleImputer",
             "strategy": "median",
@@ -119,9 +121,10 @@ def main() -> None:
             indent=2,
         )
 
-    logger.info("Final Random Forest export completed.")
+    logger.info("Final Random Forest pipeline export completed.")
 
     print(f"\nModel saved to: {FINAL_MODEL_PATH}")
+
     print(f"Schema saved to: {MODEL_SCHEMA_PATH}")
 
 

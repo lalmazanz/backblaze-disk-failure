@@ -14,6 +14,7 @@ from src.config import (
     NEGATIVE_RATIO,
     RANDOM_FOREST_PARAMS,
     RANDOM_STATE,
+    REPORTS_DIR,
     TOP_PCT,
 )
 from src.evaluation.policy import get_daily_alerts
@@ -237,6 +238,19 @@ def main() -> None:
 
     results_df = pd.DataFrame(results)
 
+    REPORTS_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    output_path = REPORTS_DIR / "backtest_results.csv"
+
+    results_df.to_csv(
+        output_path,
+        index=False,
+    )
+
+    print(f"\nBacktest results saved to: {output_path}")
     print("\nRANDOM FOREST BACKTEST SUMMARY")
 
     print(

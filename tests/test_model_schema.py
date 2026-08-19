@@ -31,7 +31,8 @@ def test_saved_schema_matches_config() -> None:
 def test_saved_schema_describes_deployed_pipeline() -> None:
     schema = load_schema()
 
-    assert schema["model_type"] == "RandomForestClassifier"
+    assert schema["model_type"] == "Pipeline"
+    assert schema["estimator_type"] == "RandomForestClassifier"
 
     preprocessing = schema["preprocessing"]
 
