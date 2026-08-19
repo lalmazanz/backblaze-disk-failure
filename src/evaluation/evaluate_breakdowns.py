@@ -20,7 +20,7 @@ from src.config import (
     TEST_START,
     TOP_PCT,
 )
-from src.evaluation.policy import get_daily_alerts
+from src.evaluation.policy import add_daily_alert_policy
 from src.modeling.data import (
     load_period,
     load_undersampled_train,
@@ -55,14 +55,9 @@ def calculate_operational_recall(
         ]
     )
 
-    alerts = get_daily_alerts(
-        data,
-        top_pct=TOP_PCT,
-    )
-
     detected_drives = set(
-        alerts.loc[
-            alerts["failure_next_7d"] == 1,
+        data.loc[
+            (data["failure_next_7d"] == 1) & data["top_1pct_alert"],
             "drive_id",
         ]
     )
@@ -88,6 +83,7 @@ def evaluate_by_model(
             continue
 
         y_true = subset["failure_next_7d"]
+
         scores = subset["risk_score"]
 
         positive_rows = int(y_true.sum())
@@ -116,16 +112,19 @@ def evaluate_by_model(
             drive_recall,
         ) = calculate_operational_recall(subset)
 
+        alert_rows = int(subset["top_1pct_alert"].sum())
+
         rows.append(
             {
                 "model": model_name,
                 "rows": len(subset),
-                "positive_rows": positive_rows,
-                "positive_drives": positive_drives,
-                "detected_drives": detected_drives,
+                "positive_rows": (positive_rows),
+                "alert_rows": alert_rows,
+                "positive_drives": (positive_drives),
+                "detected_drives": (detected_drives),
                 "roc_auc": roc_auc,
                 "pr_auc": pr_auc,
-                "top_1pct_drive_recall": drive_recall,
+                "global_top_1pct_drive_recall": (drive_recall),
             }
         )
 
@@ -139,6 +138,7 @@ def evaluate_by_date(
 
     for date, subset in test.groupby("date"):
         y_true = subset["failure_next_7d"]
+
         scores = subset["risk_score"]
 
         positive_rows = int(y_true.sum())
@@ -161,10 +161,7 @@ def evaluate_by_date(
             else float("nan")
         )
 
-        alerts = get_daily_alerts(
-            subset,
-            top_pct=TOP_PCT,
-        )
+        alerts = subset[subset["top_1pct_alert"]]
 
         positive_alert_rows = int(alerts["failure_next_7d"].sum())
 
@@ -172,9 +169,9 @@ def evaluate_by_date(
             {
                 "date": date,
                 "rows": len(subset),
-                "positive_rows": positive_rows,
+                "positive_rows": (positive_rows),
                 "alert_rows": len(alerts),
-                "positive_alert_rows": positive_alert_rows,
+                "positive_alert_rows": (positive_alert_rows),
                 "roc_auc": roc_auc,
                 "pr_auc": pr_auc,
             }
@@ -200,6 +197,7 @@ def main() -> None:
     ).copy()
 
     x_train = train[FEATURE_COLUMNS]
+
     y_train = train["failure_next_7d"]
 
     x_test = test[FEATURE_COLUMNS]
@@ -217,14 +215,22 @@ def main() -> None:
 
     test["drive_id"] = test["model"] + ":" + test["serial_number"]
 
-    print("\nPER-MODEL EVALUATION")
-
-    model_results = evaluate_by_model(test)
+    # Apply the operational policy once,
+    # globally across all drive models
+    # for each observation date.
+    test = add_daily_alert_policy(
+        test,
+        top_pct=TOP_PCT,
+    )
 
     REPORTS_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
+
+    print("\nPER-MODEL EVALUATION (GLOBAL TOP 1% POLICY)")
+
+    model_results = evaluate_by_model(test)
 
     model_output_path = REPORTS_DIR / "model_breakdown.csv"
 
