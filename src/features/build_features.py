@@ -55,14 +55,22 @@ def main() -> None:
                 column,
                 f"""
                 CASE
-                    WHEN date - {column}_date_lag_1 = 1
+                    WHEN date_diff(
+                        'day',
+                        {column}_date_lag_1,
+                        date
+                    ) = 1
                     THEN {column} - {column}_lag_1
                     ELSE NULL
                 END AS {column}_delta_1d
                 """,
                 f"""
                 CASE
-                    WHEN date - {column}_date_lag_7 = 7
+                    WHEN date_diff(
+                        'day',
+                        {column}_date_lag_7,
+                        date
+                    ) = 7
                     THEN {column} - {column}_lag_7
                     ELSE NULL
                 END AS {column}_delta_7d
@@ -96,13 +104,21 @@ def main() -> None:
             model,
 
             CASE
-                WHEN date - smart_5_raw_date_lag_1 = 1
+                WHEN date_diff(
+                    'day',
+                    smart_5_raw_date_lag_1,
+                    date
+                ) = 1
                 THEN 1
                 ELSE 0
             END AS has_1d_history,
 
             CASE
-                WHEN date - smart_5_raw_date_lag_7 = 7
+                WHEN date_diff(
+                    'day',
+                    smart_5_raw_date_lag_7,
+                    date
+                ) = 7
                 THEN 1
                 ELSE 0
             END AS has_7d_history,

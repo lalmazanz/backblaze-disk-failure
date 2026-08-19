@@ -1,12 +1,14 @@
 import duckdb
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
     average_precision_score,
     precision_score,
     recall_score,
     roc_auc_score,
 )
+from sklearn.pipeline import Pipeline
 
 from src.config import (
     FEATURE_COLUMNS,
@@ -164,7 +166,21 @@ def main() -> None:
 
     logger.info("Training final Random Forest...")
 
-    model = RandomForestClassifier(**RANDOM_FOREST_PARAMS)
+    model = Pipeline(
+        steps=[
+            (
+                "imputer",
+                SimpleImputer(
+                    strategy="median",
+                    keep_empty_features=True,
+                ),
+            ),
+            (
+                "classifier",
+                RandomForestClassifier(**RANDOM_FOREST_PARAMS),
+            ),
+        ]
+    )
 
     model.fit(
         x_train,

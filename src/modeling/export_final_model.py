@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 import duckdb
 import joblib
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
 
 from src.config import (
     FEATURE_COLUMNS,
@@ -49,7 +51,21 @@ def main() -> None:
 
     logger.info("Training final Random Forest...")
 
-    model = RandomForestClassifier(**RANDOM_FOREST_PARAMS)
+    model = Pipeline(
+        steps=[
+            (
+                "imputer",
+                SimpleImputer(
+                    strategy="median",
+                    keep_empty_features=True,
+                ),
+            ),
+            (
+                "classifier",
+                RandomForestClassifier(**RANDOM_FOREST_PARAMS),
+            ),
+        ]
+    )
 
     model.fit(
         x_train,
@@ -70,6 +86,10 @@ def main() -> None:
 
     schema = {
         "model_type": "RandomForestClassifier",
+        "preprocessing": {
+            "imputer": "SimpleImputer",
+            "strategy": "median",
+        },
         "target": "failure_next_7d",
         "prediction_horizon_days": (PREDICTION_HORIZON_DAYS),
         "features": FEATURE_COLUMNS,

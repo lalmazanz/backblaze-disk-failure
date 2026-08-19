@@ -52,7 +52,6 @@ def load_data() -> pd.DataFrame:
     data = pd.read_parquet(DATA_PATH)
 
     data["date"] = pd.to_datetime(data["date"])
-
     data["failure_date"] = pd.to_datetime(data["failure_date"])
 
     return data
@@ -67,7 +66,9 @@ def get_model():
 def get_explainer():
     model = get_model()
 
-    return shap.TreeExplainer(model)
+    classifier = model.named_steps["classifier"]
+
+    return shap.TreeExplainer(classifier)
 
 
 def format_risk(
@@ -379,7 +380,6 @@ def get_smart_summary(
         }
 
     current_value = selected_row[feature]
-
     selected_date = selected_row["date"]
 
     target_date = selected_date - pd.Timedelta(days=7)
@@ -491,9 +491,21 @@ def get_local_shap(
         columns=FEATURE_COLUMNS,
     )
 
+    model = get_model()
+
+    imputer = model.named_steps["imputer"]
+
+    x_imputed = imputer.transform(x_selected)
+
+    x_imputed = pd.DataFrame(
+        x_imputed,
+        columns=FEATURE_COLUMNS,
+        index=x_selected.index,
+    )
+
     explainer = get_explainer()
 
-    explanation = explainer(x_selected)
+    explanation = explainer(x_imputed)
 
     values = explanation.values
 
@@ -507,8 +519,8 @@ def get_local_shap(
     shap_data = pd.DataFrame(
         {
             "feature": FEATURE_COLUMNS,
-            "feature_value": (x_selected.iloc[0].values),
-            "shap_value": (shap_values),
+            "feature_value": (x_imputed.iloc[0].values),
+            "shap_value": shap_values,
         }
     )
 
@@ -569,7 +581,7 @@ def build_shap_chart(
                 ),
                 alt.Tooltip(
                     "feature_value:Q",
-                    title=("Observed value"),
+                    title="Observed value",
                     format=".2f",
                 ),
                 alt.Tooltip(
@@ -614,10 +626,7 @@ def render_shap_summary(
         if positive.empty:
             st.caption("No strong positive contributors.")
         else:
-            for (
-                _,
-                row,
-            ) in positive.iterrows():
+            for _, row in positive.iterrows():
                 st.write(f"• {row['feature_label']} ({row['shap_value']:+.3f})")
 
     with right:
@@ -626,16 +635,13 @@ def render_shap_summary(
         if negative.empty:
             st.caption("No strong negative contributors.")
         else:
-            for (
-                _,
-                row,
-            ) in negative.iterrows():
+            for _, row in negative.iterrows():
                 st.write(f"• {row['feature_label']} ({row['shap_value']:+.3f})")
 
 
 def main() -> None:
     st.set_page_config(
-        page_title=("Disk Failure Early Warning"),
+        page_title="Disk Failure Early Warning",
         page_icon="💾",
         layout="wide",
     )
@@ -666,8 +672,8 @@ def main() -> None:
 
     selected_category = st.sidebar.selectbox(
         "Case type",
-        options=(available_categories),
-        format_func=(lambda value: CATEGORY_LABELS[value]),
+        options=available_categories,
+        format_func=lambda value: CATEGORY_LABELS[value],
     )
 
     category_data = data[data["demo_category"] == selected_category]
@@ -676,7 +682,7 @@ def main() -> None:
 
     selected_drive = st.sidebar.selectbox(
         "Drive",
-        options=(available_drives),
+        options=available_drives,
     )
 
     drive_data = (
@@ -695,8 +701,8 @@ def main() -> None:
 
     selected_date = st.sidebar.selectbox(
         "Observation date",
-        options=(available_dates),
-        index=(default_date_index),
+        options=available_dates,
+        index=default_date_index,
     )
 
     selected_rows = drive_data[drive_data["date"].dt.date == selected_date]
@@ -721,7 +727,7 @@ def main() -> None:
 
     col2.metric(
         "Daily risk rank",
-        (f"#{int(selected_row['risk_rank'])}"),
+        f"#{int(selected_row['risk_rank'])}",
     )
 
     alert_status = "High risk" if selected_row["top_1pct_alert"] else "Not alerted"

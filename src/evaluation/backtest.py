@@ -1,15 +1,19 @@
 import duckdb
+import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
     average_precision_score,
     roc_auc_score,
 )
+from sklearn.pipeline import Pipeline
 
 from src.config import (
     FEATURE_COLUMNS,
     NEGATIVE_RATIO,
     RANDOM_FOREST_PARAMS,
+    RANDOM_STATE,
     TOP_PCT,
 )
 from src.evaluation.policy import get_daily_alerts
@@ -43,9 +47,58 @@ BACKTEST_WINDOWS = [
 ]
 
 
+def calculate_drive_recall(
+    data: pd.DataFrame,
+    score_column: str,
+) -> float:
+    scored = data.copy()
+
+    scored["risk_score"] = scored[score_column]
+
+    positive_drives = set(
+        scored.loc[
+            scored["failure_next_7d"] == 1,
+            "drive_id",
+        ]
+    )
+
+    alerts = get_daily_alerts(
+        scored,
+        top_pct=TOP_PCT,
+    )
+
+    positive_alerts = alerts[alerts["failure_next_7d"] == 1]
+
+    detected_drives = set(positive_alerts["drive_id"])
+
+    if not positive_drives:
+        return 0.0
+
+    return len(detected_drives) / len(positive_drives)
+
+
+def add_baseline_scores(
+    evaluation: pd.DataFrame,
+    seed: int,
+) -> pd.DataFrame:
+    result = evaluation.copy()
+
+    rng = np.random.default_rng(seed)
+
+    result["random_score"] = rng.random(len(result))
+
+    smart_197 = result["smart_197_raw"].fillna(0)
+    smart_198 = result["smart_198_raw"].fillna(0)
+
+    result["smart_baseline_score"] = smart_197 + smart_198
+
+    return result
+
+
 def evaluate_window(
     con: duckdb.DuckDBPyConnection,
     window: dict,
+    window_index: int,
 ) -> dict:
     print(f"\n{window['name']}")
     print(f"Train: {window['train_start']} -> {window['train_end']}")
@@ -70,25 +123,44 @@ def evaluate_window(
     x_eval = evaluation[FEATURE_COLUMNS]
     y_eval = evaluation["failure_next_7d"]
 
-    model = RandomForestClassifier(**RANDOM_FOREST_PARAMS)
+    model = Pipeline(
+        steps=[
+            (
+                "imputer",
+                SimpleImputer(
+                    strategy="median",
+                    keep_empty_features=True,
+                ),
+            ),
+            (
+                "classifier",
+                RandomForestClassifier(**RANDOM_FOREST_PARAMS),
+            ),
+        ]
+    )
 
     model.fit(
         x_train,
         y_train,
     )
 
-    evaluation["risk_score"] = model.predict_proba(x_eval)[:, 1]
+    evaluation["model_score"] = model.predict_proba(x_eval)[:, 1]
 
     evaluation["drive_id"] = evaluation["model"] + ":" + evaluation["serial_number"]
 
+    evaluation = add_baseline_scores(
+        evaluation,
+        seed=RANDOM_STATE + window_index,
+    )
+
     roc_auc = roc_auc_score(
         y_eval,
-        evaluation["risk_score"],
+        evaluation["model_score"],
     )
 
     pr_auc = average_precision_score(
         y_eval,
-        evaluation["risk_score"],
+        evaluation["model_score"],
     )
 
     positive_drives = set(
@@ -98,17 +170,19 @@ def evaluate_window(
         ]
     )
 
-    alerts = get_daily_alerts(
+    model_recall = calculate_drive_recall(
         evaluation,
-        top_pct=TOP_PCT,
+        "model_score",
     )
 
-    positive_alerts = alerts[alerts["failure_next_7d"] == 1]
+    random_recall = calculate_drive_recall(
+        evaluation,
+        "random_score",
+    )
 
-    detected_drives = set(positive_alerts["drive_id"])
-
-    operational_recall = (
-        len(detected_drives) / len(positive_drives) if positive_drives else 0.0
+    smart_recall = calculate_drive_recall(
+        evaluation,
+        "smart_baseline_score",
     )
 
     print(f"Training rows: {len(train)}")
@@ -116,10 +190,15 @@ def evaluate_window(
     print(f"Eval rows: {len(evaluation)}")
     print(f"Positive rows: {int(y_eval.sum())}")
     print(f"Positive drives: {len(positive_drives)}")
-    print(f"Detected drives: {len(detected_drives)}")
+
+    print("\nModel:")
     print(f"ROC-AUC: {roc_auc:.4f}")
     print(f"PR-AUC: {pr_auc:.4f}")
-    print(f"Top 1% drive recall: {operational_recall:.4f}")
+    print(f"Top 1% drive recall: {model_recall:.4f}")
+
+    print("\nBaselines:")
+    print(f"Random top 1% drive recall: {random_recall:.4f}")
+    print(f"SMART 197/198 top 1% drive recall: {smart_recall:.4f}")
 
     return {
         "backtest": window["name"],
@@ -132,10 +211,11 @@ def evaluate_window(
         "eval_rows": len(evaluation),
         "positive_rows": int(y_eval.sum()),
         "positive_drives": len(positive_drives),
-        "detected_drives": len(detected_drives),
         "roc_auc": roc_auc,
         "pr_auc": pr_auc,
-        "top_1pct_drive_recall": (operational_recall),
+        "model_drive_recall": model_recall,
+        "random_drive_recall": random_recall,
+        "smart_drive_recall": smart_recall,
     }
 
 
@@ -146,10 +226,11 @@ def main() -> None:
 
     print("Running purged Random Forest temporal backtests...")
 
-    for window in BACKTEST_WINDOWS:
+    for index, window in enumerate(BACKTEST_WINDOWS):
         result = evaluate_window(
             con,
             window,
+            window_index=index,
         )
 
         results.append(result)
@@ -166,17 +247,26 @@ def main() -> None:
                 "eval_start",
                 "roc_auc",
                 "pr_auc",
-                "positive_drives",
-                "detected_drives",
-                "top_1pct_drive_recall",
+                "model_drive_recall",
+                "random_drive_recall",
+                "smart_drive_recall",
             ]
         ].to_string(index=False)
     )
 
-    print("\nAverage metrics:")
+    print("\nMean metrics:")
     print(f"ROC-AUC: {results_df['roc_auc'].mean():.4f}")
     print(f"PR-AUC: {results_df['pr_auc'].mean():.4f}")
-    print(f"Top 1% drive recall: {results_df['top_1pct_drive_recall'].mean():.4f}")
+    print(f"Model top 1% drive recall: {results_df['model_drive_recall'].mean():.4f}")
+    print(f"Random top 1% drive recall: {results_df['random_drive_recall'].mean():.4f}")
+    print(f"SMART top 1% drive recall: {results_df['smart_drive_recall'].mean():.4f}")
+
+    print("\nStandard deviation:")
+    print(f"ROC-AUC: {results_df['roc_auc'].std():.4f}")
+    print(f"PR-AUC: {results_df['pr_auc'].std():.4f}")
+    print(f"Model top 1% drive recall: {results_df['model_drive_recall'].std():.4f}")
+    print(f"Random top 1% drive recall: {results_df['random_drive_recall'].std():.4f}")
+    print(f"SMART top 1% drive recall: {results_df['smart_drive_recall'].std():.4f}")
 
 
 if __name__ == "__main__":

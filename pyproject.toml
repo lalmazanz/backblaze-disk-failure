@@ -5,18 +5,23 @@ description = "Predictive maintenance project using Backblaze hard drive SMART d
 requires-python = ">=3.12"
 
 dependencies = [
+    "altair",
     "duckdb",
+    "joblib",
     "lightgbm",
     "matplotlib",
+    "numpy",
     "pandas",
     "pyarrow",
     "requests",
     "scikit-learn",
     "shap",
+    "streamlit",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "pytest",
     "ruff",
 ]
 
@@ -25,9 +30,12 @@ line-length = 88
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
+select = ["E", "F", "I", "RUF"]
 
 [tool.pytest.ini_options]
 filterwarnings = [
     "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning:joblib.numpy_pickle",
+    "ignore:The set_bad function will be deprecated in a future version:PendingDeprecationWarning:shap.plots.colors._colors",
+    "ignore:The set_over function will be deprecated in a future version:PendingDeprecationWarning:shap.plots.colors._colors",
+    "ignore:The set_under function will be deprecated in a future version:PendingDeprecationWarning:shap.plots.colors._colors",
 ]

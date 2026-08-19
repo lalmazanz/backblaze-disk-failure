@@ -102,10 +102,8 @@ def validate_features(
         raise FeatureSchemaError("Input contains infinite values.")
 
     # NaN values are intentionally allowed.
-    # Random Forest itself cannot consume NaNs in
-    # every sklearn version, so exported/demo data
-    # should preserve the same feature-generation
-    # assumptions used during model training.
+    # The exported model pipeline applies median
+    # imputation before Random Forest inference.
 
 
 def predict_risk(

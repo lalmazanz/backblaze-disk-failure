@@ -77,7 +77,7 @@ def select_detected_case(
 
     if detected.empty:
         raise ValueError(
-            "Detected alerts exist, but none fall inside the 1–7 day failure horizon."
+            "Detected alerts exist, but none fall inside the 1-7 day failure horizon."
         )
 
     earliest_alerts = (
