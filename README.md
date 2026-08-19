@@ -132,9 +132,9 @@ This produces:
 
 ```text id="rwf21j"
 8 SMART attributes × 5 representations = 40
-2 history indicators                    =  2
-                                             ──
-Total model features                    = 42
+2 history indicators                   =  2
+                                         ──
+Total model features                   = 42
 ```
 
 The objective is to capture both the **current state of the drive** and recent changes that may indicate progressive degradation.
@@ -246,6 +246,7 @@ RandomForestClassifier(
     n_jobs=-1,
 )
 ```
+Random Forest was selected as the final deployed model because it provided a strong operational trade-off under the daily top-1% alert policy while keeping the inference and explainability pipeline comparatively simple. LightGBM achieved very similar held-out performance, so the final choice was based on the complete operational workflow rather than a marginal difference in a single ranking metric.
 
 The model outputs a continuous `risk_score` for every drive-day observation.
 
@@ -266,7 +267,7 @@ For each evaluation date:
 3. the daily alert budget is calculated as 1% of that day's evaluated fleet;
 4. only drives inside that budget are flagged.
 
-At least one drive can be alerted on each evaluation day.
+At least one drive is included in the daily alert budget, even when 1% of the evaluated fleet would round down to zero.
 
 ```text id="1rd7lg"
 Daily fleet
