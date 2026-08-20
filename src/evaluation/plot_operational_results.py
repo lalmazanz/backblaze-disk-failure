@@ -44,10 +44,29 @@ def plot_detection_by_model() -> None:
             va="bottom",
         )
 
-    ax.set_title("Failure Detection by Drive Model\nDaily Top-1% Inspection Budget")
+    ax.set_title(
+        "Failure Detection by Drive Model",
+        pad=22,
+    )
+
+    ax.text(
+        0.5,
+        1.02,
+        "Daily Top-1% Inspection Budget",
+        transform=ax.transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=10,
+    )
+
     ax.set_xlabel("Drive model")
     ax.set_ylabel("Failing drives")
     ax.legend()
+
+    ax.set_ylim(
+        0,
+        data["positive_drives"].max() + 4,
+    )
 
     plt.xticks(rotation=15, ha="right")
     plt.tight_layout()
